@@ -11,6 +11,14 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/**
+ * UI Component for rendering the manual entry field and scanned barcode display.
+ *
+ * FOCUS MANAGEMENT:
+ * - Uses [pointerInput] with [detectTapGestures] on the root container so tapping outside an active
+ *   TextField automatically clears focus and hides the soft keyboard.
+ * - Displays the captured barcode state passed from [MainActivity] independently of active input fields.
+ */
 @Composable
 fun ScannerTestScreen(
     scannedCode: String,
@@ -24,6 +32,10 @@ fun ScannerTestScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
+            /*
+             * TAP-TO-DISMISS KEYBOARD:
+             * Intercepts background tap gestures to dismiss focus and hide the software IME keyboard.
+             */
             .pointerInput(Unit) {
                 detectTapGestures(onTap = {
                     focusManager.clearFocus()
@@ -52,6 +64,11 @@ fun ScannerTestScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                /*
+                 * VISIBLE MANUAL INPUT FIELD:
+                 * Standard TextField for user typing. Physical USB scanner hardware input targeting
+                 * this field is intercepted upstream in MainActivity.dispatchKeyEvent.
+                 */
                 TextField(
                     value = manualInputText,
                     onValueChange = onManualInputChanged,
@@ -60,6 +77,10 @@ fun ScannerTestScreen(
                 )
             }
 
+            /*
+             * SCANNED RESULT DISPLAY CARD:
+             * Displays the scanned barcode received from the Activity key interceptor.
+             */
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
