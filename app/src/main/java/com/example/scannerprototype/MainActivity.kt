@@ -1,6 +1,7 @@
 package com.example.scannerprototype
 
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.view.InputDevice
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -10,47 +11,89 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
+import com.example.scannerprototype.data.CheckInApi
+import com.example.scannerprototype.data.CheckInUiState
 import com.example.scannerprototype.ui.ScannerTestScreen
+import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
- * Main Activity handling window-level hardware barcode scanner input interception.
- *
- * ARCHITECTURAL OVERVIEW:
- * USB HID Barcode Scanners act as physical keyboards. When a scan occurs, characters arrive
- * in rapid succession (<50ms apart) followed by an ENTER terminator.
- *
- * INTERCEPTION MECHANISM:
- * Standard Compose/View key listeners on TextFields cannot block printable characters once
- * a text field is focused. We override [dispatchKeyEvent] at the Activity root window level.
- * Because window key dispatching occurs BEFORE key events reach focused UI elements:
- * 1. We detect rapid key timing and physical HID input devices.
- * 2. We buffer character stream into an in-memory [scanBuffer].
- * 3. We return 'true' to consume events, preventing characters from typing into active TextFields.
- * 4. We clean up any initial character leaks once the scan stream completes.
+ * Main Activity handling window-level hardware barcode scanner input interception,
+ * triggering check-in requests upon code scan with a 5-second cooldown delay,
+ * and reading out check-in messages using Text-To-Speech (TTS).
  */
 class MainActivity : ComponentActivity() {
 
     // States passed down to Compose UI
     val scannedCodeState = mutableStateOf("")
     val manualInputState = mutableStateOf("")
+    val checkInUiState = mutableStateOf<CheckInUiState>(CheckInUiState.Idle)
 
     private val scanBuffer = StringBuilder()
     private var lastKeyTime = 0L
+    private var lastScanProcessTime = 0L
     private val SCANNER_THRESHOLD_MS = 50L // Keypress interval threshold (scanners fire <30ms)
+    private val SCAN_COOLDOWN_MS = 5000L // 5 second delay between scans
+
+    // Text To Speech Engine
+    private var textToSpeech: TextToSpeech? = null
+    private var isTtsInitialized = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Initialize Android Text To Speech Engine
+        textToSpeech = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                val result = textToSpeech?.setLanguage(Locale.US)
+                if (result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED) {
+                    isTtsInitialized = true
+                }
+            }
+        }
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     ScannerTestScreen(
-                        scannedCode = scannedCodeState.value,
                         manualInputText = manualInputState.value,
-                        onManualInputChanged = { manualInputState.value = it }
+                        onManualInputChanged = { manualInputState.value = it },
+                        checkInState = checkInUiState.value
                     )
                 }
             }
         }
+    }
+
+    private fun speakText(text: String) {
+        if (isTtsInitialized && text.isNotBlank()) {
+            textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "CHECK_IN_TTS_ID")
+        }
+    }
+
+    private fun performCheckIn(tokenValue: String) {
+        checkInUiState.value = CheckInUiState.Loading
+        lifecycleScope.launch {
+            val result = CheckInApi.checkInWithPass(tokenValue)
+            result.onSuccess { response ->
+                checkInUiState.value = CheckInUiState.Success(response)
+                val messageToSpeak = response.message.takeIf { !it.isNullOrBlank() }
+                    ?: if (response.checkedOutAt.isNullOrBlank()) "Check-in Successful" else "Check-out Successful"
+                speakText(messageToSpeak)
+            }.onFailure { error ->
+                val errorMessage = error.message ?: "Check-in request failed"
+                checkInUiState.value = CheckInUiState.Error(errorMessage)
+                speakText(errorMessage)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        textToSpeech = null
+        super.onDestroy()
     }
 
     /**
@@ -80,6 +123,14 @@ class MainActivity : ComponentActivity() {
             if (event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
                 if (scanBuffer.isNotEmpty()) {
                     val fullCode = scanBuffer.toString().trim()
+                    scanBuffer.setLength(0) // Reset buffer for next scan
+
+                    // 5-SECOND COOLDOWN: Ignore scans that occur within 5 seconds of the last processed scan
+                    if (currentTime - lastScanProcessTime < SCAN_COOLDOWN_MS) {
+                        return true // CONSUME EVENT: Keeps screen text unchanged and prevents duplicate requests
+                    }
+
+                    lastScanProcessTime = currentTime
                     scannedCodeState.value = fullCode
 
                     /*
@@ -99,7 +150,9 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    scanBuffer.setLength(0) // Reset buffer for next scan
+                    // Trigger API check-in request with scanned code token
+                    performCheckIn(fullCode)
+
                     return true // CONSUME EVENT: Stops ENTER from submitting forms or adding line breaks
                 }
             } else {
