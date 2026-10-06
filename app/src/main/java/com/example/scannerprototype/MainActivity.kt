@@ -1,5 +1,7 @@
 package com.example.scannerprototype
 
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.view.InputDevice
@@ -20,8 +22,10 @@ import java.util.Locale
 
 /**
  * Main Activity handling window-level hardware barcode scanner input interception,
- * triggering check-in requests upon code scan with a 5-second cooldown delay,
- * and reading out check-in messages using Text-To-Speech (TTS).
+ * manual sign-in and sign-out form submissions, triggering check-in requests,
+ * enforcing cooldown delays, playing a scanner beep sound upon valid scan requests,
+ * displaying live cooldown warning sub-banners without replacing active dialogs,
+ * and reading out messages via Text-To-Speech (TTS).
  */
 class MainActivity : ComponentActivity() {
 
@@ -32,16 +36,23 @@ class MainActivity : ComponentActivity() {
 
     private val scanBuffer = StringBuilder()
     private var lastKeyTime = 0L
-    private var lastScanProcessTime = 0L
-    private val SCANNER_THRESHOLD_MS = 50L // Keypress interval threshold (scanners fire <30ms)
-    private val SCAN_COOLDOWN_MS = 5000L // 5 second delay between scans
 
-    // Text To Speech Engine
+    private val SCANNER_THRESHOLD_MS = 50L // Keypress interval threshold (scanners fire <30ms)
+    private val API_COOLDOWN_MS = 10000L   // 10 second minimum delay between API calls
+    private var lastApiCallTime = 0L
+
+    // Text To Speech & Audio Beep Engines
     private var textToSpeech: TextToSpeech? = null
     private var isTtsInitialized = false
+    private var toneGenerator: ToneGenerator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Initialize Android ToneGenerator for scanner feedback sound
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+        } catch (_: Exception) {}
 
         // Initialize Android Text To Speech Engine
         textToSpeech = TextToSpeech(this) { status ->
@@ -57,13 +68,29 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     ScannerTestScreen(
-                        manualInputText = manualInputState.value,
-                        onManualInputChanged = { manualInputState.value = it },
-                        checkInState = checkInUiState.value
+                        scannedCodeText = scannedCodeState.value,
+                        onScannedCodeChanged = { scannedCodeState.value = it },
+                        checkInState = checkInUiState.value,
+                        onDismissDialog = {
+                            checkInUiState.value = CheckInUiState.Idle
+                            scanBuffer.setLength(0)
+                        },
+                        onManualCheckInSubmit = { firstName, lastName, phone, purpose, hasSymptoms ->
+                            performManualCheckIn(firstName, lastName, phone, purpose, hasSymptoms)
+                        },
+                        onManualSignOutSubmit = { phone ->
+                            performManualSignOut(phone)
+                        }
                     )
                 }
             }
         }
+    }
+
+    private fun playBeepSound() {
+        try {
+            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
+        } catch (_: Exception) {}
     }
 
     private fun speakText(text: String) {
@@ -72,17 +99,133 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun getApiCooldownRemainingSeconds(): Long {
+        val currentTime = System.currentTimeMillis()
+        val timeSinceLastCall = currentTime - lastApiCallTime
+        return if (timeSinceLastCall < API_COOLDOWN_MS) {
+            val remainingMs = API_COOLDOWN_MS - timeSinceLastCall
+            (remainingMs + 999) / 1000
+        } else {
+            0L
+        }
+    }
+
     private fun performCheckIn(tokenValue: String) {
+        if (checkInUiState.value !is CheckInUiState.Idle) {
+            return
+        }
+
+        val remainingSeconds = getApiCooldownRemainingSeconds()
+        if (remainingSeconds > 0) {
+            speakText("Please wait $remainingSeconds seconds before trying again.")
+            return
+        }
+
+        playBeepSound()
+        lastApiCallTime = System.currentTimeMillis()
         checkInUiState.value = CheckInUiState.Loading
         lifecycleScope.launch {
             val result = CheckInApi.checkInWithPass(tokenValue)
             result.onSuccess { response ->
+                val rawMsg = response.message
+                val isInvalidPassMsg = rawMsg != null && (rawMsg.contains("invalid", ignoreCase = true) || rawMsg.contains("pass", ignoreCase = true))
+                if (!response.ok || isInvalidPassMsg) {
+                    val displayMessage = "Please try again."
+                    checkInUiState.value = CheckInUiState.Error(displayMessage)
+                    speakText(displayMessage)
+                } else {
+                    checkInUiState.value = CheckInUiState.Success(response)
+                    val messageToSpeak = rawMsg.takeIf { !it.isNullOrBlank() }
+                        ?: if (response.checkedOutAt.isNullOrBlank()) "Check-in Successful" else "Check-out Successful"
+                    speakText(messageToSpeak)
+                }
+            }.onFailure { error ->
+                val rawMsg = error.message ?: "Check-in request failed"
+                val displayMessage = if (rawMsg.contains("invalid", ignoreCase = true) || rawMsg.contains("pass", ignoreCase = true)) {
+                    "Please try again."
+                } else {
+                    rawMsg
+                }
+                checkInUiState.value = CheckInUiState.Error(displayMessage)
+                speakText(displayMessage)
+            }
+        }
+    }
+
+    private fun performManualCheckIn(
+        firstName: String,
+        lastName: String,
+        phone: String,
+        purpose: String,
+        hasSymptoms: Boolean
+    ) {
+        if (checkInUiState.value !is CheckInUiState.Idle) {
+            return
+        }
+
+        val remainingSeconds = getApiCooldownRemainingSeconds()
+        if (remainingSeconds > 0) {
+            speakText("Please wait $remainingSeconds seconds before trying again.")
+            return
+        }
+
+        lastApiCallTime = System.currentTimeMillis()
+        checkInUiState.value = CheckInUiState.Loading
+        lifecycleScope.launch {
+            val symptomsStr = if (hasSymptoms) "Yes" else "No"
+            val result = CheckInApi.signInManual(
+                firstName = firstName,
+                lastName = lastName,
+                phoneNumber = phone,
+                purpose = purpose,
+                symptoms = symptomsStr
+            )
+
+            result.onSuccess { response ->
                 checkInUiState.value = CheckInUiState.Success(response)
-                val messageToSpeak = response.message.takeIf { !it.isNullOrBlank() }
-                    ?: if (response.checkedOutAt.isNullOrBlank()) "Check-in Successful" else "Check-out Successful"
+                val messageToSpeak = if (response.status == "already_checked_in") {
+                    val name = response.visitorName.takeIf { !it.isNullOrBlank() }
+                        ?: "$firstName $lastName"
+                    val msg = response.message.takeIf { !it.isNullOrBlank() }
+                        ?: "You are already checked in."
+                    "$name, $msg"
+                } else {
+                    response.message.takeIf { !it.isNullOrBlank() } ?: "Visitor checked in."
+                }
                 speakText(messageToSpeak)
             }.onFailure { error ->
                 val errorMessage = error.message ?: "Check-in request failed"
+                checkInUiState.value = CheckInUiState.Error(errorMessage)
+                speakText(errorMessage)
+            }
+        }
+    }
+
+    private fun performManualSignOut(
+        phone: String
+    ) {
+        if (checkInUiState.value !is CheckInUiState.Idle) {
+            return
+        }
+
+        val remainingSeconds = getApiCooldownRemainingSeconds()
+        if (remainingSeconds > 0) {
+            speakText("Please wait $remainingSeconds seconds before trying again.")
+            return
+        }
+
+        lastApiCallTime = System.currentTimeMillis()
+        checkInUiState.value = CheckInUiState.Loading
+        lifecycleScope.launch {
+            val result = CheckInApi.signOutManual(phoneNumber = phone)
+
+            result.onSuccess { response ->
+                checkInUiState.value = CheckInUiState.Success(response)
+                val messageToSpeak = response.message.takeIf { !it.isNullOrBlank() }
+                    ?: if (response.status == "not_checked_in") "You are not signed in. Please sign in first." else "Goodbye."
+                speakText(messageToSpeak)
+            }.onFailure { error ->
+                val errorMessage = error.message ?: "Sign-out request failed"
                 checkInUiState.value = CheckInUiState.Error(errorMessage)
                 speakText(errorMessage)
             }
@@ -93,6 +236,10 @@ class MainActivity : ComponentActivity() {
         textToSpeech?.stop()
         textToSpeech?.shutdown()
         textToSpeech = null
+        try {
+            toneGenerator?.release()
+            toneGenerator = null
+        } catch (_: Exception) {}
         super.onDestroy()
     }
 
@@ -102,6 +249,17 @@ class MainActivity : ComponentActivity() {
      */
     @Suppress("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // When a message box/dialog is active on screen (checkInUiState is NOT Idle),
+        // completely consume and ignore all key events from the scanner/keyboard (except volume control).
+        // The message box must remain visible and not get dismissed, and no action/TTS should occur.
+        if (checkInUiState.value !is CheckInUiState.Idle) {
+            scanBuffer.setLength(0)
+            if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                return super.dispatchKeyEvent(event)
+            }
+            return true // CONSUME EVENT: Ignore scanner/keyboard input and prevent message box dismissal
+        }
+
         if (event.action == KeyEvent.ACTION_DOWN) {
             val currentTime = System.currentTimeMillis()
             val timeDiff = currentTime - lastKeyTime
@@ -117,20 +275,14 @@ class MainActivity : ComponentActivity() {
                     event.device.keyboardType != InputDevice.KEYBOARD_TYPE_NONE
 
             /*
-             * 1. SCAN COMPLETION / TERMINATOR HANDLING (ENTER KEY)
-             * Scanners emit an ENTER key (\n / \r) at the end of a scan payload.
+             * 1. SCAN COMPLETION / TERMINATOR HANDLING (ENTER & TAB KEYS)
+             * Scanners emit an ENTER key (\n / \r) or TAB at the end of a scan payload.
              */
-            if (event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            if (event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || event.keyCode == KeyEvent.KEYCODE_TAB) {
                 if (scanBuffer.isNotEmpty()) {
                     val fullCode = scanBuffer.toString().trim()
                     scanBuffer.setLength(0) // Reset buffer for next scan
 
-                    // 5-SECOND COOLDOWN: Ignore scans that occur within 5 seconds of the last processed scan
-                    if (currentTime - lastScanProcessTime < SCAN_COOLDOWN_MS) {
-                        return true // CONSUME EVENT: Keeps screen text unchanged and prevents duplicate requests
-                    }
-
-                    lastScanProcessTime = currentTime
                     scannedCodeState.value = fullCode
 
                     /*
@@ -154,6 +306,9 @@ class MainActivity : ComponentActivity() {
                     performCheckIn(fullCode)
 
                     return true // CONSUME EVENT: Stops ENTER from submitting forms or adding line breaks
+                } else {
+                    // CONSUME TRAILING TERMINATOR KEYS (e.g. \n after \r in CRLF scanner suffix)
+                    return true
                 }
             } else {
                 /*
