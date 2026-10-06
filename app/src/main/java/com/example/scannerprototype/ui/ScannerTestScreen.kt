@@ -226,11 +226,11 @@ private fun CheckInResponseCard(
 
                                 if (!response.purpose.isNullOrBlank()) {
                                     Text(
-                                        text = "Purpose: ${response.purpose}",
-                                        fontSize = 20.sp,
-                                        fontWeight = FontWeight.Medium,
+                                        text = "Purpose of Visit: ${response.purpose}",
+                                        fontSize = 22.sp,
+                                        fontWeight = FontWeight.Bold,
                                         textAlign = TextAlign.Center,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onBackground
                                     )
                                 }
                             } else if (response.status == "not_checked_in") {
@@ -256,6 +256,16 @@ private fun CheckInResponseCard(
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                                         color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+
+                                if (!response.purpose.isNullOrBlank()) {
+                                    Text(
+                                        text = "Purpose of Visit: ${response.purpose}",
+                                        fontSize = 22.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center,
+                                        color = MaterialTheme.colorScheme.onBackground
                                     )
                                 }
                             } else {
@@ -319,11 +329,11 @@ private fun CheckInResponseCard(
 
                                 if (!response.purpose.isNullOrBlank()) {
                                     Text(
-                                        text = "Purpose: ${response.purpose}",
-                                        fontSize = 20.sp,
-                                        fontWeight = FontWeight.Medium,
+                                        text = "Purpose of Visit: ${response.purpose}",
+                                        fontSize = 22.sp,
+                                        fontWeight = FontWeight.Bold,
                                         textAlign = TextAlign.Center,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onBackground
                                     )
                                 }
                             }

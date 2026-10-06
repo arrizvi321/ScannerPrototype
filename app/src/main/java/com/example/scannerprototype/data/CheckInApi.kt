@@ -65,15 +65,15 @@ object CheckInApi {
                 val json = JSONObject(responseBody)
                 val response = CheckInResponse(
                     ok = json.optBoolean("ok", false),
-                    status = json.optNullableString("status"),
-                    firstName = json.optNullableString("firstName"),
-                    lastName = json.optNullableString("lastName"),
-                    visitorName = json.optNullableString("visitorName"),
-                    visitId = json.optNullableString("visitId"),
-                    message = json.optNullableString("message"),
-                    checkedInAt = json.optNullableString("checkedInAt"),
-                    checkedOutAt = json.optNullableString("checkedOutAt"),
-                    purpose = json.optNullableString("purpose")
+                    status = extractProperty(json, "status"),
+                    firstName = extractProperty(json, "firstName", "first_name"),
+                    lastName = extractProperty(json, "lastName", "last_name"),
+                    visitorName = extractProperty(json, "visitorName", "visitor_name", "name"),
+                    visitId = extractProperty(json, "visitId", "visit_id", "id"),
+                    message = extractProperty(json, "message"),
+                    checkedInAt = extractProperty(json, "checkedInAt", "checked_in_at"),
+                    checkedOutAt = extractProperty(json, "checkedOutAt", "checked_out_at"),
+                    purpose = extractProperty(json, "purpose", "visit_purpose", "purpose_of_visit", "purposeOfVisit")
                 )
                 Result.success(response)
             } else {
@@ -133,15 +133,15 @@ object CheckInApi {
                 val json = JSONObject(responseBody)
                 val response = CheckInResponse(
                     ok = json.optBoolean("ok", false),
-                    status = json.optNullableString("status"),
-                    firstName = json.optNullableString("firstName") ?: firstName,
-                    lastName = json.optNullableString("lastName") ?: lastName,
-                    visitorName = json.optNullableString("visitorName") ?: "$firstName $lastName",
-                    visitId = json.optNullableString("visitId"),
-                    message = json.optNullableString("message"),
-                    checkedInAt = json.optNullableString("checkedInAt"),
-                    checkedOutAt = json.optNullableString("checkedOutAt"),
-                    purpose = json.optNullableString("purpose") ?: purpose
+                    status = extractProperty(json, "status"),
+                    firstName = extractProperty(json, "firstName", "first_name") ?: firstName,
+                    lastName = extractProperty(json, "lastName", "last_name") ?: lastName,
+                    visitorName = extractProperty(json, "visitorName", "visitor_name", "name") ?: "$firstName $lastName",
+                    visitId = extractProperty(json, "visitId", "visit_id", "id"),
+                    message = extractProperty(json, "message"),
+                    checkedInAt = extractProperty(json, "checkedInAt", "checked_in_at"),
+                    checkedOutAt = extractProperty(json, "checkedOutAt", "checked_out_at"),
+                    purpose = extractProperty(json, "purpose", "visit_purpose", "purpose_of_visit", "purposeOfVisit") ?: purpose
                 )
                 Result.success(response)
             } else {
@@ -193,15 +193,15 @@ object CheckInApi {
                 val json = JSONObject(responseBody)
                 val response = CheckInResponse(
                     ok = json.optBoolean("ok", false),
-                    status = json.optNullableString("status"),
-                    firstName = json.optNullableString("firstName"),
-                    lastName = json.optNullableString("lastName"),
-                    visitorName = json.optNullableString("visitorName"),
-                    visitId = json.optNullableString("visitId"),
-                    message = json.optNullableString("message"),
-                    checkedInAt = json.optNullableString("checkedInAt"),
-                    checkedOutAt = json.optNullableString("checkedOutAt"),
-                    purpose = json.optNullableString("purpose")
+                    status = extractProperty(json, "status"),
+                    firstName = extractProperty(json, "firstName", "first_name"),
+                    lastName = extractProperty(json, "lastName", "last_name"),
+                    visitorName = extractProperty(json, "visitorName", "visitor_name", "name"),
+                    visitId = extractProperty(json, "visitId", "visit_id", "id"),
+                    message = extractProperty(json, "message"),
+                    checkedInAt = extractProperty(json, "checkedInAt", "checked_in_at"),
+                    checkedOutAt = extractProperty(json, "checkedOutAt", "checked_out_at"),
+                    purpose = extractProperty(json, "purpose", "visit_purpose", "purpose_of_visit", "purposeOfVisit")
                 )
                 Result.success(response)
             } else {
@@ -219,5 +219,24 @@ object CheckInApi {
 
     private fun JSONObject.optNullableString(key: String): String? {
         return if (has(key) && !isNull(key)) getString(key) else null
+    }
+
+    private fun extractProperty(json: JSONObject, vararg keys: String): String? {
+        // 1. Search top-level keys
+        for (k in keys) {
+            val value = json.optNullableString(k)
+            if (!value.isNullOrBlank()) return value
+        }
+
+        // 2. Search common nested sub-objects (e.g. visitor, pass, visit, data, details)
+        val subObjectNames = listOf("visitor", "pass", "visit", "data", "details")
+        for (subName in subObjectNames) {
+            val subObj = json.optJSONObject(subName) ?: continue
+            for (k in keys) {
+                val value = subObj.optNullableString(k)
+                if (!value.isNullOrBlank()) return value
+            }
+        }
+        return null
     }
 }

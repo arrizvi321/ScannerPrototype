@@ -135,8 +135,13 @@ class MainActivity : ComponentActivity() {
                     speakText(displayMessage)
                 } else {
                     checkInUiState.value = CheckInUiState.Success(response)
-                    val messageToSpeak = rawMsg.takeIf { !it.isNullOrBlank() }
+                    val baseMessage = rawMsg.takeIf { !it.isNullOrBlank() }
                         ?: if (response.checkedOutAt.isNullOrBlank()) "Check-in Successful" else "Check-out Successful"
+                    val messageToSpeak = if (!response.purpose.isNullOrBlank()) {
+                        "$baseMessage. Purpose: ${response.purpose}"
+                    } else {
+                        baseMessage
+                    }
                     speakText(messageToSpeak)
                 }
             }.onFailure { error ->
@@ -183,7 +188,7 @@ class MainActivity : ComponentActivity() {
 
             result.onSuccess { response ->
                 checkInUiState.value = CheckInUiState.Success(response)
-                val messageToSpeak = if (response.status == "already_checked_in") {
+                val baseMessage = if (response.status == "already_checked_in") {
                     val name = response.visitorName.takeIf { !it.isNullOrBlank() }
                         ?: "$firstName $lastName"
                     val msg = response.message.takeIf { !it.isNullOrBlank() }
@@ -191,6 +196,11 @@ class MainActivity : ComponentActivity() {
                     "$name, $msg"
                 } else {
                     response.message.takeIf { !it.isNullOrBlank() } ?: "Visitor checked in."
+                }
+                val messageToSpeak = if (!response.purpose.isNullOrBlank()) {
+                    "$baseMessage. Purpose: ${response.purpose}"
+                } else {
+                    baseMessage
                 }
                 speakText(messageToSpeak)
             }.onFailure { error ->
@@ -221,8 +231,13 @@ class MainActivity : ComponentActivity() {
 
             result.onSuccess { response ->
                 checkInUiState.value = CheckInUiState.Success(response)
-                val messageToSpeak = response.message.takeIf { !it.isNullOrBlank() }
+                val baseMessage = response.message.takeIf { !it.isNullOrBlank() }
                     ?: if (response.status == "not_checked_in") "You are not signed in. Please sign in first." else "Goodbye."
+                val messageToSpeak = if (!response.purpose.isNullOrBlank()) {
+                    "$baseMessage. Purpose: ${response.purpose}"
+                } else {
+                    baseMessage
+                }
                 speakText(messageToSpeak)
             }.onFailure { error ->
                 val errorMessage = error.message ?: "Sign-out request failed"
